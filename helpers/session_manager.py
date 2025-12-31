@@ -30,6 +30,7 @@ class SessionManager:
         self.idle_timeout_seconds = idle_timeout_minutes * 60
         self.active_sessions: OrderedDict[int, TelegramClient] = OrderedDict()
         self.last_activity: Dict[int, float] = {}  # Track last activity time per user
+        self.pending_creations: Set[int] = set() # Track sessions currently being created
         self._lock = asyncio.Lock()
         self._cleanup_task = None
         LOGGER(__name__).info(f"Session Manager initialized: max {max_sessions} concurrent sessions, {idle_timeout_minutes}min idle timeout")
@@ -52,6 +53,7 @@ class SessionManager:
                 - (None, 'slots_full') if all slots have active downloads
                 - (None, 'invalid_session') if session is not authorized
                 - (None, 'creation_failed') if session creation failed
+                - (None, 'already_creating') if a session is already being created for this user
         """
         async with self._lock:
             # Check if user already has active session
@@ -62,6 +64,11 @@ class SessionManager:
                 self.last_activity[user_id] = time()
                 LOGGER(__name__).debug(f"Reusing existing session for user {user_id}")
                 return (self.active_sessions[user_id], None)
+            
+            # Prevent churn: Check if already creating
+            if user_id in self.pending_creations:
+                LOGGER(__name__).warning(f"Session creation already in progress for user {user_id}")
+                return (None, 'already_creating')
             
             # If at capacity, try to disconnect oldest IDLE session (no active downloads)
             if len(self.active_sessions) >= self.max_sessions:
@@ -80,10 +87,35 @@ class SessionManager:
                     try:
                         from memory_monitor import memory_monitor
                         memory_monitor.track_session_cleanup(oldest_idle_user)
-                        await oldest_client.disconnect()
+                        
+                        # Set timeout for disconnect to prevent hanging
+                        try:
+                            await asyncio.wait_for(oldest_client.disconnect(), timeout=10)
+                        except asyncio.TimeoutError:
+                            LOGGER(__name__).warning(f"Timeout disconnecting session for user {oldest_idle_user}")
+                        
+                        # Explicitly clear internal buffers and references
+                        if hasattr(oldest_client, '_sender') and oldest_client._sender:
+                            try:
+                                if hasattr(oldest_client._sender, '_buffer'):
+                                    oldest_client._sender._buffer = None
+                            except:
+                                pass
+                            # Explicitly disconnect and cleanup sender internal loop
+                            try:
+                                await asyncio.wait_for(oldest_client._sender.disconnect(), timeout=5)
+                            except:
+                                pass
+                            oldest_client._sender = None
+                        
                         # Clear activity timestamp for evicted session
                         self.last_activity.pop(oldest_idle_user, None)
                         LOGGER(__name__).info(f"Disconnected oldest idle session: user {oldest_idle_user} (no active downloads)")
+                        
+                        # Force GC after session removal
+                        import gc
+                        gc.collect()
+                        
                         memory_monitor.log_memory_snapshot("Session Disconnected", f"Freed idle session for user {oldest_idle_user}", silent=True)
                     except Exception as e:
                         LOGGER(__name__).error(f"Error disconnecting session {oldest_idle_user}: {e}")
@@ -95,44 +127,53 @@ class SessionManager:
                     )
                     return (None, 'slots_full')
             
-            # Create new session
-            try:
-                from memory_monitor import memory_monitor
-                
-                memory_monitor.track_session_creation(user_id)
-                
-                # Create Telethon client with StringSession
-                client = TelegramClient(
-                    StringSession(session_string),
-                    api_id,
-                    api_hash,
-                    connection_retries=3,
-                    retry_delay=1,
-                    auto_reconnect=True,
-                    timeout=10
-                )
-                
-                # Connect the client
-                await client.connect()
-                
-                # Verify the session is valid
-                if not await client.is_user_authorized():
-                    LOGGER(__name__).error(f"Session for user {user_id} is not authorized")
-                    await client.disconnect()
-                    return (None, 'invalid_session')
-                
+            self.pending_creations.add(user_id)
+
+        # Create new session outside the lock to allow other operations
+        try:
+            from memory_monitor import memory_monitor
+            
+            memory_monitor.track_session_creation(user_id)
+            
+            # Create Telethon client with StringSession
+            # Use base_logger to ensure logs are captured
+            # Passing StringSession object ensures no .session file is created on disk
+            client = TelegramClient(
+                StringSession(session_string),
+                api_id,
+                api_hash,
+                connection_retries=3,
+                retry_delay=1,
+                auto_reconnect=True,
+                timeout=10,
+                base_logger=LOGGER(__name__)
+            )
+            
+            # Connect the client
+            await client.connect()
+            
+            # Verify the session is valid
+            if not await client.is_user_authorized():
+                LOGGER(__name__).error(f"Session for user {user_id} is not authorized")
+                await client.disconnect()
+                return (None, 'invalid_session')
+            
+            async with self._lock:
                 self.active_sessions[user_id] = client
                 # Track activity time
                 self.last_activity[user_id] = time()
                 LOGGER(__name__).info(f"Created new session for user {user_id} ({len(self.active_sessions)}/{self.max_sessions})")
                 
                 memory_monitor.log_memory_snapshot("Session Created", f"User {user_id} - Total sessions: {len(self.active_sessions)}", silent=True)
-                
-                return (client, None)
-                
-            except Exception as e:
-                LOGGER(__name__).error(f"Failed to create session for user {user_id}: {e}")
-                return (None, 'creation_failed')
+            
+            return (client, None)
+            
+        except Exception as e:
+            LOGGER(__name__).error(f"Failed to create session for user {user_id}: {e}")
+            return (None, 'creation_failed')
+        finally:
+            async with self._lock:
+                self.pending_creations.discard(user_id)
     
     async def remove_session(self, user_id: int):
         """Remove and disconnect a specific user session"""
@@ -141,10 +182,26 @@ class SessionManager:
                 try:
                     from memory_monitor import memory_monitor
                     memory_monitor.track_session_cleanup(user_id)
-                    await self.active_sessions[user_id].disconnect()
+                    client = self.active_sessions[user_id]
+                    
+                    # Set timeout for disconnect to prevent hanging
+                    try:
+                        await asyncio.wait_for(client.disconnect(), timeout=10)
+                    except asyncio.TimeoutError:
+                        LOGGER(__name__).warning(f"Timeout disconnecting session for user {user_id}")
+                        
+                    # Explicitly clear internal buffers and references
+                    if hasattr(client, '_sender'):
+                        client._sender = None
+                        
                     del self.active_sessions[user_id]
                     self.last_activity.pop(user_id, None)
                     LOGGER(__name__).info(f"Removed session for user {user_id}")
+                    
+                    # Force GC after session removal
+                    import gc
+                    gc.collect()
+                    
                     memory_monitor.log_memory_snapshot("Session Removed", f"User {user_id}", silent=True)
                 except Exception as e:
                     LOGGER(__name__).error(f"Error removing session {user_id}: {e}")
@@ -199,10 +256,25 @@ class SessionManager:
                         LOGGER(__name__).info(f"Disconnecting idle session for user {user_id} (idle for {idle_minutes:.1f} minutes)")
                         
                         memory_monitor.track_session_cleanup(user_id)
-                        await self.active_sessions[user_id].disconnect()
+                        
+                        # Set timeout for disconnect to prevent hanging
+                        client = self.active_sessions[user_id]
+                        try:
+                            await asyncio.wait_for(client.disconnect(), timeout=10)
+                        except asyncio.TimeoutError:
+                            LOGGER(__name__).warning(f"Timeout disconnecting idle session for user {user_id}")
+                            
+                        # Explicitly clear internal buffers and references
+                        if hasattr(client, '_sender'):
+                            client._sender = None
+                            
                         del self.active_sessions[user_id]
                         del self.last_activity[user_id]
                         disconnected_count += 1
+                        
+                        # Force GC after session removal
+                        import gc
+                        gc.collect()
                         
                         LOGGER(__name__).info(f"Session cleaned up: User {user_id} was idle for {idle_minutes:.0f}min")
                     except Exception as e:

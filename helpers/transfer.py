@@ -89,10 +89,10 @@ async def download_media_fast(
             if isinstance(extended, list) and len(extended) > 0:
                 first_media = extended[0]
                 if hasattr(first_media, 'media') and first_media.media:
-                    LOGGER(__name__).info(f"Extracted media from paid media container")
+                    LOGGER(__name__).info(f"Extracted media from paid media container using user session")
                     return await client.download_media(first_media.media, file=file, progress_callback=progress_callback)
             elif hasattr(extended, 'media') and extended.media:
-                LOGGER(__name__).info(f"Extracted single media from paid media container")
+                LOGGER(__name__).info(f"Extracted single media from paid media container using user session")
                 return await client.download_media(extended.media, file=file, progress_callback=progress_callback)
         raise ValueError("Paid media (premium content) cannot be downloaded - the content owner requires payment to access this media")
     
@@ -207,6 +207,14 @@ async def upload_media_fast(
         
     except Exception as e:
         LOGGER(__name__).error(f"FastTelethon upload failed: {e}")
+        # Explicitly cleanup ParallelTransferrer pool if it exists
+        if 'ParallelTransferrer' in globals():
+            try:
+                # ParallelTransferrer usually cleans up on __del__ or when connections are lost
+                # but we force a GC here to be safe
+                gc.collect()
+            except:
+                pass
         return None
         
     finally:
