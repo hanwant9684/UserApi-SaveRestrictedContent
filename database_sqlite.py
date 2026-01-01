@@ -406,6 +406,17 @@ class DatabaseManager:
 
     def increment_usage(self, user_id: int, count: int = 1) -> bool:
         try:
+            # Still record daily usage for stats even for paid/admin users
+            date = datetime.now().strftime('%Y-%m-%d')
+            with self.lock:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute('INSERT OR IGNORE INTO daily_usage (user_id, date, files_downloaded) VALUES (?, ?, 0)', (user_id, date))
+                cursor.execute('UPDATE daily_usage SET files_downloaded = files_downloaded + ? WHERE user_id = ? AND date = ?',
+                               (count, user_id, date))
+                conn.commit()
+                conn.close()
+
             user_type = self.get_user_type(user_id)
             
             if user_type in ['admin', 'paid']:

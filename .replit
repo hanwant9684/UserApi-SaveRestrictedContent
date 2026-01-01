@@ -1,7 +1,7 @@
 modules = ["web", "python-3.11"]
 [nix]
 channel = "stable-25_05"
-packages = ["cargo", "libiconv", "libuv", "openssl", "rustc", "unzip"]
+packages = ["cargo", "libiconv", "libuv", "openssl", "rustc", "unzip", "ffmpeg"]
 
 [agent]
 expertMode = true

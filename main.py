@@ -777,6 +777,9 @@ async def download_range(event):
     else:
         LOGGER(__name__).debug(f"Batch download: User {event.sender_id} has no running tasks - proceeding")
 
+    # Register user in active downloads at the start of the batch
+    download_manager.add_active_download(event.sender_id)
+    
     try:
         start_chat, start_id = getChatMsgID(args[1])
         end_chat,   end_id   = getChatMsgID(args[2])
@@ -950,6 +953,9 @@ async def download_range(event):
                     continue
 
                 LOGGER(__name__).debug(f"Batch: downloading msg {msg_id}")
+                # Update activity timestamp to prevent timeout during long batch
+                session_manager.last_activity[event.sender_id] = time()
+                
                 task = track_task(handle_download(event, url, client_to_use, False), event.sender_id)
                 try:
                     await task
@@ -967,6 +973,9 @@ async def download_range(event):
                     return await event.respond(
                         f"**❌ Batch canceled** after downloading `{downloaded}` posts."
                     )
+                finally:
+                    # Clear specific message download status, but batch loop will keep user in active_downloads
+                    pass
 
             except Exception as e:
                 error_msg = str(e)
