@@ -1342,8 +1342,14 @@ def run_bot():
         background_tasks = []
         
         try:
-            # The bot is imported from main, and its client is already initialized
-            # We just need to start the specific background tasks required for the server environment
+            # CRITICAL: Cleanup orphaned files from previous crashes FIRST
+            from helpers.files import cleanup_orphaned_files
+            files_removed, bytes_freed = cleanup_orphaned_files()
+            if files_removed > 0:
+                main.LOGGER(__name__).warning(
+                    f"🧹 Startup cleanup: Removed {files_removed} orphaned files "
+                    f"({bytes_freed / (1024*1024):.1f} MB freed) from previous crashes"
+                )
             
             main.LOGGER(__name__).info("Starting Telegram bot from server_wsgi.py (long polling)")
             await main.bot.start(bot_token=main.PyroConf.BOT_TOKEN)
@@ -1353,58 +1359,82 @@ def run_bot():
             
             main.LOGGER(__name__).info("Bot started successfully, waiting for updates...")
             
-            # Start background tasks
             main.phone_auth_handler.start_cleanup_task()
             
             from helpers.cleanup import start_periodic_cleanup
             background_tasks.append(asyncio.create_task(start_periodic_cleanup(interval_minutes=30)))
+            main.LOGGER(__name__).info("Started periodic download cleanup task")
             
             from helpers.session_manager import session_manager
             await session_manager.start_cleanup_task()
+            main.LOGGER(__name__).info("Started periodic session cleanup task (10min idle timeout)")
             
             background_tasks.append(asyncio.create_task(periodic_gc_task()))
+            main.LOGGER(__name__).info("Started periodic garbage collection task")
+            
             background_tasks.append(asyncio.create_task(cleanup_watchdog_task()))
+            main.LOGGER(__name__).info("Started cleanup watchdog task (removes expired ad sessions every 5 min)")
             
             from memory_monitor import memory_monitor
             background_tasks.append(asyncio.create_task(memory_monitor.periodic_monitor(interval=300)))
+            main.LOGGER(__name__).info("Started periodic memory monitoring (5-minute intervals)")
             
             # Start download manager
             from queue_manager import download_manager
             await download_manager.start_processor()
+            main.LOGGER(__name__).info("Download manager initialized")
             
-            # Cloud backup tasks
+            memory_monitor.log_memory_snapshot("Bot Startup", "Initial state after bot start")
+            
+            # Cloud backup tasks (GitHub backups every 10 minutes)
             try:
                 from cloud_backup import periodic_cloud_backup, restore_latest_from_cloud
                 cloud_service = main.PyroConf.CLOUD_BACKUP_SERVICE
                 if cloud_service:
                     _logger.info(f"Cloud backup configured: {cloud_service}")
-                    # Only restore if db doesn't exist or as part of recovery
-                    # For now, keeping the "restore on startup" logic if that's preferred
-                    await restore_latest_from_cloud()
+                    # Always restore from GitHub on startup (cloud-only approach)
+                    _logger.info("Restoring database from GitHub...")
+                    result = await restore_latest_from_cloud()
+                    if result:
+                        _logger.info(f"✅ Database restored from {cloud_service}")
+                    else:
+                        _logger.warning(f"No backup found or restoration failed")
                     
+                    # Start periodic cloud backups (every 10 minutes)
                     cloud_interval_minutes = int(os.environ.get('CLOUD_BACKUP_INTERVAL_MINUTES', '10'))
                     background_tasks.append(asyncio.create_task(periodic_cloud_backup(interval_minutes=cloud_interval_minutes)))
+                    _logger.info(f"Started periodic {cloud_service} backup (every {cloud_interval_minutes} minutes)")
+                else:
+                    _logger.info("Cloud backup not configured")
             except Exception as e:
-                _logger.warning(f"Cloud backup initialization error: {e}")
+                _logger.warning(f"Cloud backup error: {e}")
             
-            # Periodic orphaned file cleanup
+            # Periodic orphaned file cleanup (every 1 hour) to prevent storage bloat from crashes
             async def periodic_orphaned_cleanup():
                 while True:
                     try:
-                        await asyncio.sleep(3600)
+                        await asyncio.sleep(3600)  # 1 hour
                         from helpers.files import cleanup_orphaned_files
-                        cleanup_orphaned_files()
+                        files, bytes_freed = cleanup_orphaned_files()
+                        if files > 0:
+                            main.LOGGER(__name__).warning(
+                                f"⏰ Periodic cleanup: Removed {files} orphaned files "
+                                f"({bytes_freed / (1024*1024):.1f} MB freed)"
+                            )
                     except asyncio.CancelledError:
+                        main.LOGGER(__name__).info("Periodic orphaned cleanup task cancelled")
                         break
                     except Exception as e:
                         main.LOGGER(__name__).error(f"Periodic orphaned cleanup error: {e}")
             
             background_tasks.append(asyncio.create_task(periodic_orphaned_cleanup()))
+            main.LOGGER(__name__).info("Started periodic orphaned file cleanup (every 1h)")
             
-            # Verify dump channel
+            _logger.info("About to verify dump channel...")
+            
             try:
-                if hasattr(main, 'verify_dump_channel'):
-                    await main.verify_dump_channel()
+                await main.verify_dump_channel()
+                _logger.info("Dump channel verification complete")
             except Exception as e:
                 _logger.error(f"Error in verify_dump_channel: {e}")
             

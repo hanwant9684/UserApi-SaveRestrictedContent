@@ -77,9 +77,8 @@ from ad_manager import ad_manager
 from cloud_backup import restore_latest_from_cloud, periodic_cloud_backup
 
 # Initialize the bot client with Telethon
-# Use StringSession to avoid .session files on disk
 bot = TelegramClient(
-    StringSession(),
+    'media_bot',
     PyroConf.API_ID,
     PyroConf.API_HASH
 )
@@ -103,10 +102,7 @@ async def main():
         asyncio.create_task(periodic_cloud_backup(interval_minutes=30))
     
     LOGGER(__name__).info("Bot started successfully")
-    try:
-        await bot.run_until_disconnected()
-    except asyncio.CancelledError:
-        LOGGER(__name__).info("Bot disconnection requested")
+    await bot.run_until_disconnected()
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -169,15 +165,12 @@ async def send_video_message(event, video_message_id: int, caption: str, markup=
     """Helper function to send video message with fallback to text"""
     try:
         video_message = await bot.get_messages("Wolfy004", ids=video_message_id)
-        if video_message:
-            # Handle case where get_messages returns a list
-            msg = video_message[0] if isinstance(video_message, list) else video_message
-            if hasattr(msg, 'video') and msg.video:
-                buttons = markup.to_telethon() if markup else None
-                return await event.respond(caption, file=msg.video, buttons=buttons)
-        
-        buttons = markup.to_telethon() if markup else None
-        return await event.respond(caption, buttons=buttons, link_preview=False)
+        if video_message and video_message.video:
+            buttons = markup.to_telethon() if markup else None
+            return await event.respond(caption, file=video_message.video, buttons=buttons)
+        else:
+            buttons = markup.to_telethon() if markup else None
+            return await event.respond(caption, buttons=buttons, link_preview=False)
     except Exception as e:
         LOGGER(__name__).warning(f"Could not send video in {log_context}: {e}")
         buttons = markup.to_telethon() if markup else None
@@ -540,7 +533,7 @@ async def handle_download(event, post_url: str, user_client, increment_usage=Tru
                     )
                     
                     # Show RichAds after download completes for free users
-                    await ad_manager.send_ad_with_fallback(bot, event.sender_id, event.chat_id, is_premium=False, is_admin=False)
+                    await ad_manager.send_ad_with_fallback(bot_client, event.sender_id, event.chat_id, is_premium=False, is_admin=False)
                 else:
                     # Premium/Admin users: simple completion message without buttons
                     await event.respond("✅ **Download complete**")
@@ -597,7 +590,7 @@ async def handle_download(event, post_url: str, user_client, increment_usage=Tru
                     else "document"
                 )
                 await send_media(
-                    client_to_use,
+                    bot_client,
                     event,
                     media_path,
                     media_type,
@@ -606,7 +599,6 @@ async def handle_download(event, post_url: str, user_client, increment_usage=Tru
                     start_time,
                     event.sender_id,
                     source_url=post_url,
-                    bot=bot
                 )
                 return True
 
@@ -698,14 +690,7 @@ async def download_media(event):
     user_client, error_code = await get_user_client(event.sender_id)
     
     # Handle session errors
-    if error_code == 'no_api':
-        await event.respond(
-            "❌ **API credentials not set up!**\n\n"
-            "Use `/setapi <api_id> <api_hash>` to set your Telegram API credentials.\n\n"
-            "**Get your API from:** https://my.telegram.org/apps"
-        )
-        return
-    elif error_code == 'no_session':
+    if error_code == 'no_session':
         await event.respond(
             "❌ **No active session found.**\n\n"
             "Please login with your phone number:\n"
@@ -733,7 +718,7 @@ async def download_media(event):
     is_premium = db.get_user_type(event.sender_id) in ['paid', 'admin']
     
     # Start download (immediate start or reject if busy)
-    download_coro = handle_download(event, post_url, user_client, True)
+    download_coro = handle_download(bot, event, post_url, user_client, True)
     success, msg = await download_manager.start_download(
         event.sender_id,
         download_coro,
@@ -777,10 +762,6 @@ async def download_range(event):
     else:
         LOGGER(__name__).debug(f"Batch download: User {event.sender_id} has no running tasks - proceeding")
 
-    # Register user in active downloads at the start of the batch
-    from queue_manager import download_manager
-    download_manager.add_active_download(event.sender_id)
-    
     try:
         start_chat, start_id = getChatMsgID(args[1])
         end_chat,   end_id   = getChatMsgID(args[2])
@@ -814,14 +795,7 @@ async def download_range(event):
     user_client, error_code = await get_user_client(event.sender_id)
     
     # Handle session errors
-    if error_code == 'no_api':
-        await event.respond(
-            "❌ **API credentials not set up!**\n\n"
-            "Use `/setapi <api_id> <api_hash>` to set your Telegram API credentials.\n\n"
-            "**Get your API from:** https://my.telegram.org/apps"
-        )
-        return
-    elif error_code == 'no_session':
+    if error_code == 'no_session':
         await event.respond(
             "❌ **No active session found.**\n\n"
             "Please login with your phone number:\n"
@@ -947,17 +921,9 @@ async def download_range(event):
                         skipped += 1
                         continue
                     LOGGER(__name__).debug(f"Batch: new media group {current_grouped_id}")
-                
-                # Double check content existence
-                if not (chat_msg.media or chat_msg.message):
-                    skipped += 1
-                    continue
 
                 LOGGER(__name__).debug(f"Batch: downloading msg {msg_id}")
-                # Update activity timestamp to prevent timeout during long batch
-                session_manager.last_activity[event.sender_id] = time()
-                
-                task = track_task(handle_download(event, url, client_to_use, False), event.sender_id)
+                task = track_task(handle_download(bot, event, url, client_to_use, False), event.sender_id)
                 try:
                     await task
                     downloaded += 1
@@ -974,9 +940,6 @@ async def download_range(event):
                     return await event.respond(
                         f"**❌ Batch canceled** after downloading `{downloaded}` posts."
                     )
-                finally:
-                    # Clear specific message download status, but batch loop will keep user in active_downloads
-                    pass
 
             except Exception as e:
                 error_msg = str(e)
@@ -1168,85 +1131,6 @@ async def cancel_download_command(event):
     else:
         await event.respond(cancel_msg)
 
-@bot.on(events.NewMessage(pattern='/setapi', incoming=True, func=lambda e: e.is_private))
-@register_user
-async def setapi_command(event):
-    """Set user's Telegram API credentials"""
-    args = event.text.split()
-    if len(args) != 3:
-        await event.respond(
-            "❌ **Usage:** `/setapi <api_id> <api_hash>`\n\n"
-            "**Get your API credentials from:** https://my.telegram.org/apps\n\n"
-            "**Example:**\n"
-            "`/setapi 12345678 abcdef1234567890abcdef1234567890`"
-        )
-        return
-    
-    try:
-        api_id = int(args[1])
-        api_hash = args[2].strip()
-        
-        if len(api_hash) < 32:
-            await event.respond("❌ **API Hash is too short.** Make sure you copied it correctly from https://my.telegram.org/apps")
-            return
-        
-        if db.set_user_api_credentials(event.sender_id, api_id, api_hash):
-            await event.respond(
-                "✅ **API credentials saved successfully!**\n\n"
-                "Your downloads will now use your personal Telegram account instead of the bot account.\n\n"
-                "💡 **Next:** Use `/login <phone>` to authenticate and start downloading!"
-            )
-            LOGGER(__name__).info(f"User {event.sender_id} set API credentials (api_id: {api_id})")
-        else:
-            await event.respond("❌ **Failed to save API credentials. Please try again.**")
-    except ValueError:
-        await event.respond("❌ **Invalid API_ID.** Must be a number.\n\n**Example:** `/setapi 12345678 abcdef...`")
-
-@bot.on(events.NewMessage(pattern='/myapi', incoming=True, func=lambda e: e.is_private))
-@register_user
-async def myapi_command(event):
-    """Check if user's API credentials are set up"""
-    credentials = db.get_user_api_credentials(event.sender_id)
-    session = db.get_user_session(event.sender_id)
-    
-    if not credentials:
-        await event.respond(
-            "❌ **No API credentials set.**\n\n"
-            "Use `/setapi <api_id> <api_hash>` to set up your account.\n\n"
-            "**Get API from:** https://my.telegram.org/apps"
-        )
-        return
-    
-    api_id, api_hash = credentials
-    status = "✅ Authenticated" if session else "⏳ Needs login"
-    
-    await event.respond(
-        f"🔐 **Your API Setup**\n\n"
-        f"API ID: `{api_id}`\n"
-        f"API Hash: `{api_hash[:16]}...`\n"
-        f"Status: {status}\n\n"
-        f"💡 Use `/login <phone>` to authenticate"
-    )
-
-@bot.on(events.NewMessage(pattern='/removeapi', incoming=True, func=lambda e: e.is_private))
-@register_user
-async def removeapi_command(event):
-    """Remove saved API credentials"""
-    if db.set_user_api_credentials(event.sender_id, None, None):
-        # Also logout
-        db.set_user_session(event.sender_id, None)
-        from helpers.session_manager import session_manager
-        await session_manager.remove_session(event.sender_id)
-        
-        await event.respond(
-            "✅ **API credentials and session removed.**\n\n"
-            "Bot will use its own account for future downloads.\n\n"
-            "Use `/setapi` to set up your account again."
-        )
-        LOGGER(__name__).info(f"User {event.sender_id} removed API credentials")
-    else:
-        await event.respond("❌ **Failed to remove credentials. Please try again.**")
-
 @bot.on(events.NewMessage(pattern='/status', incoming=True, func=lambda e: e.is_private))
 @register_user
 async def status_command(event):
@@ -1284,14 +1168,7 @@ async def handle_any_message(event):
         user_client, error_code = await get_user_client(event.sender_id)
         
         # Handle session errors
-        if error_code == 'no_api':
-            await event.respond(
-                "❌ **API credentials not set up!**\n\n"
-                "Use `/setapi <api_id> <api_hash>` to set your Telegram API credentials.\n\n"
-                "**Get your API from:** https://my.telegram.org/apps"
-            )
-            return
-        elif error_code == 'no_session':
+        if error_code == 'no_session':
             await event.respond(
                 "❌ **No active session found.**\n\n"
                 "Please login with your phone number:\n"
@@ -1316,7 +1193,7 @@ async def handle_any_message(event):
             return
         
         # Start download (immediate start or reject if busy)
-        download_coro = handle_download(event, event.text, user_client, True)
+        download_coro = handle_download(bot, event, event.text, user_client, True)
         success, msg = await download_manager.start_download(
             event.sender_id,
             download_coro,
