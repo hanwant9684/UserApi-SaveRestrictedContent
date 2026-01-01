@@ -18,7 +18,7 @@ class SessionManager:
     This prevents memory exhaustion from too many active user sessions
     """
     
-    def __init__(self, max_sessions: int = 5, idle_timeout_minutes: int = 30):
+    def __init__(self, max_sessions: int = 10, idle_timeout_minutes: int = 30):
         """
         Args:
             max_sessions: Maximum number of concurrent user sessions
