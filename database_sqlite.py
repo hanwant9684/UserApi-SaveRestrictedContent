@@ -49,30 +49,13 @@ class DatabaseManager:
                     last_activity TEXT NOT NULL,
                     is_banned INTEGER DEFAULT 0,
                     session_string TEXT,
-                    api_id INTEGER DEFAULT NULL,
-                    api_hash TEXT DEFAULT NULL,
                     custom_thumbnail TEXT,
                     ad_downloads INTEGER DEFAULT 0,
-                    ad_downloads_reset_date TEXT
+                    ad_downloads_reset_date TEXT,
+                    api_id INTEGER,
+                    api_hash TEXT
                 )
             ''')
-            
-            # Add columns for existing databases (safe, only adds if not exists)
-            # This handles backups that don't have these columns yet
-            cursor.execute('PRAGMA table_info(users)')
-            columns = {row[1] for row in cursor.fetchall()}
-            if 'api_id' not in columns:
-                try:
-                    cursor.execute('ALTER TABLE users ADD COLUMN api_id INTEGER DEFAULT NULL')
-                    conn.commit()
-                except Exception:
-                    pass  # Column might already exist
-            if 'api_hash' not in columns:
-                try:
-                    cursor.execute('ALTER TABLE users ADD COLUMN api_hash TEXT DEFAULT NULL')
-                    conn.commit()
-                except Exception:
-                    pass  # Column might already exist
             
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS daily_usage (
@@ -406,17 +389,6 @@ class DatabaseManager:
 
     def increment_usage(self, user_id: int, count: int = 1) -> bool:
         try:
-            # Still record daily usage for stats even for paid/admin users
-            date = datetime.now().strftime('%Y-%m-%d')
-            with self.lock:
-                conn = self._get_connection()
-                cursor = conn.cursor()
-                cursor.execute('INSERT OR IGNORE INTO daily_usage (user_id, date, files_downloaded) VALUES (?, ?, 0)', (user_id, date))
-                cursor.execute('UPDATE daily_usage SET files_downloaded = files_downloaded + ? WHERE user_id = ? AND date = ?',
-                               (count, user_id, date))
-                conn.commit()
-                conn.close()
-
             user_type = self.get_user_type(user_id)
             
             if user_type in ['admin', 'paid']:
@@ -591,36 +563,72 @@ class DatabaseManager:
             LOGGER(__name__).error(f"Error setting session for {user_id}: {e}")
             return False
 
-    def get_user_session(self, user_id: int) -> Optional[str]:
-        user = self.get_user(user_id)
-        return user.get('session_string') if user else None
-    
-    def set_user_api_credentials(self, user_id: int, api_id: int, api_hash: str) -> bool:
-        """Store user's API credentials"""
+    def set_user_api(self, user_id: int, api_id: int, api_hash: str) -> bool:
+        """Store user's personal API credentials"""
         try:
             with self.lock:
                 conn = self._get_connection()
                 cursor = conn.cursor()
-                cursor.execute('UPDATE users SET api_id = ?, api_hash = ? WHERE user_id = ?', 
-                             (api_id, api_hash, user_id))
-                success = cursor.rowcount > 0
+                cursor.execute('''
+                    UPDATE users SET api_id = ?, api_hash = ? WHERE user_id = ?
+                ''', (api_id, api_hash, user_id))
                 conn.commit()
                 conn.close()
-            self.cache.delete(f"user_{user_id}")
-            return success
+                
+                # Clear cache
+                self.cache.delete(f"user_{user_id}")
+                LOGGER(__name__).info(f"Stored API credentials for user {user_id}")
+                return True
         except Exception as e:
-            LOGGER(__name__).error(f"Failed to set API credentials for user {user_id}: {e}")
+            LOGGER(__name__).error(f"Error storing API credentials for {user_id}: {e}")
             return False
-    
-    def get_user_api_credentials(self, user_id: int) -> Optional[tuple]:
-        """Get user's API credentials (api_id, api_hash)"""
+
+    def get_user_api(self, user_id: int) -> tuple:
+        """Get user's personal API credentials"""
+        try:
+            # Check cache first
+            cache_key = f"user_api_{user_id}"
+            cached = self.cache.get(cache_key)
+            if cached:
+                return cached
+            
+            with self.lock:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute('SELECT api_id, api_hash FROM users WHERE user_id = ?', (user_id,))
+                row = cursor.fetchone()
+                conn.close()
+                
+                if row and row['api_id'] and row['api_hash']:
+                    result = (row['api_id'], row['api_hash'])
+                    self.cache.set(cache_key, result, ttl=600)
+                    return result
+                return (None, None)
+        except Exception as e:
+            LOGGER(__name__).error(f"Error getting API credentials for {user_id}: {e}")
+            return (None, None)
+
+    def clear_user_api(self, user_id: int) -> bool:
+        """Clear user's API credentials"""
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE users SET api_id = NULL, api_hash = NULL, session_string = NULL WHERE user_id = ?
+                ''', (user_id,))
+                conn.commit()
+                conn.close()
+                self.cache.delete(f"user_{user_id}")
+                self.cache.delete(f"user_api_{user_id}")
+                return True
+        except Exception as e:
+            LOGGER(__name__).error(f"Error clearing API for {user_id}: {e}")
+            return False
+
+    def get_user_session(self, user_id: int) -> Optional[str]:
         user = self.get_user(user_id)
-        if user and user.get('api_id') and user.get('api_hash'):
-            try:
-                return (int(user['api_id']), str(user['api_hash']))
-            except (ValueError, TypeError):
-                return None
-        return None
+        return user.get('session_string') if user else None
 
     def get_stats(self) -> Dict:
         try:

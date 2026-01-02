@@ -112,7 +112,7 @@ if __name__ == "__main__":
 # This ensures proper memory limits (max 10 sessions on Render/Replit, ~5-10MB each due to StringSession)
 
 # Phone authentication handler
-phone_auth_handler = PhoneAuthHandler(PyroConf.API_ID, PyroConf.API_HASH)
+phone_auth_handler = PhoneAuthHandler()
 
 RUNNING_TASKS = set()
 USER_TASKS = {}
@@ -354,13 +354,12 @@ async def help_command(event):
     
     await event.respond(help_text, buttons=markup.to_telethon(), link_preview=False)
 
-async def handle_download(bot, event, post_url: str, user_client, increment_usage=True):
+async def handle_download(bot_client, event, post_url: str, user_client=None, increment_usage=True):
     """
-    Handle downloading media from Telegram posts using USER API only
+    Handle downloading media from Telegram posts
     
     IMPORTANT: user_client is managed by SessionManager - DO NOT call .stop() on it!
     The SessionManager will automatically reuse and cleanup sessions to prevent memory leaks.
-    user_client is required - user must have authenticated via /login first
     """
     # Cut off URL at '?' if present
     if "?" in post_url:
@@ -500,7 +499,7 @@ async def handle_download(bot, event, post_url: str, user_client, increment_usag
                     return
             
             # Download media group (pass user_client for private channel access)
-            files_sent = await processMediaGroup(chat_message, client_to_use, event, event.sender_id, user_client=client_to_use, source_url=post_url)
+            files_sent = await processMediaGroup(chat_message, bot_client, event, event.sender_id, user_client=client_to_use, source_url=post_url)
             
             if files_sent == 0:
                 await event.respond("**Could not extract any valid media from the media group.**")
@@ -599,6 +598,7 @@ async def handle_download(bot, event, post_url: str, user_client, increment_usag
                     start_time,
                     event.sender_id,
                     source_url=post_url,
+                    user_client=client_to_use,
                 )
                 return True
 
@@ -695,6 +695,14 @@ async def download_media(event):
             "❌ **No active session found.**\n\n"
             "Please login with your phone number:\n"
             "`/login +(91)9012345678` OR `/login +919012345678`"
+        )
+        return
+    elif error_code == 'no_api':
+        await event.respond(
+            "❌ **API credentials not set!**\n\n"
+            "Please set your API credentials first:\n"
+            "`/setapi <API_ID> <API_HASH>`\n\n"
+            "Get them from: https://my.telegram.org"
         )
         return
     elif error_code == 'slots_full':
@@ -800,6 +808,14 @@ async def download_range(event):
             "❌ **No active session found.**\n\n"
             "Please login with your phone number:\n"
             "`/login +(91)9012345678` OR `/login +919012345678`"
+        )
+        return
+    elif error_code == 'no_api':
+        await event.respond(
+            "❌ **API credentials not set!**\n\n"
+            "Please set your API credentials first:\n"
+            "`/setapi <API_ID> <API_HASH>`\n\n"
+            "Get them from: https://my.telegram.org"
         )
         return
     elif error_code == 'slots_full':
@@ -923,6 +939,7 @@ async def download_range(event):
                     LOGGER(__name__).debug(f"Batch: new media group {current_grouped_id}")
 
                 LOGGER(__name__).debug(f"Batch: downloading msg {msg_id}")
+                # Ensure we pass client_to_use (user client)
                 task = track_task(handle_download(bot, event, url, client_to_use, False), event.sender_id)
                 try:
                     await task
@@ -983,6 +1000,97 @@ async def download_range(event):
         LOGGER(__name__).debug(f"Batch: removed user {event.sender_id} from active_downloads")
 
 # Phone authentication commands
+@bot.on(events.NewMessage(pattern='/setapi', incoming=True, func=lambda e: e.is_private))
+@register_user
+async def setapi_command(event):
+    """Set user's personal API credentials"""
+    args = get_command_args(event.text)
+    
+    if len(args) < 2:
+        await event.respond(
+            "🔑 **Set Your Personal API Credentials**\n\n"
+            "**Usage:** `/setapi <API_ID> <API_HASH>`\n\n"
+            "**How to get your API credentials:**\n"
+            "1️⃣ Go to https://my.telegram.org\n"
+            "2️⃣ Login with your phone number\n"
+            "3️⃣ Click on 'API development tools'\n"
+            "4️⃣ Create a new application\n"
+            "5️⃣ Copy your `api_id` and `api_hash`\n\n"
+            "**Example:**\n"
+            "`/setapi 12345678 abcdef1234567890abcdef1234567890`\n\n"
+            "⚠️ **Keep your API credentials safe!** They give full access to your Telegram account."
+        )
+        return
+    
+    try:
+        api_id = int(args[0])
+        api_hash = args[1].strip()
+        
+        # Validate API hash format (should be 32 hex characters)
+        if len(api_hash) != 32:
+            await event.respond("❌ **Invalid API_HASH format.** It should be 32 characters long.")
+            return
+        
+        # Save to database
+        if db.set_user_api(event.sender_id, api_id, api_hash):
+            await event.respond(
+                "✅ **API credentials saved!**\n\n"
+                "Now login with your phone number:\n"
+                "`/login +919012345678`"
+            )
+            LOGGER(__name__).info(f"User {event.sender_id} set their API credentials")
+        else:
+            await event.respond("❌ **Failed to save API credentials.** Please try again.")
+            
+    except ValueError:
+        await event.respond("❌ **Invalid API_ID.** It should be a number.")
+
+
+@bot.on(events.NewMessage(pattern='/myapi', incoming=True, func=lambda e: e.is_private))
+@register_user
+async def myapi_command(event):
+    """Show user's API status"""
+    api_id, api_hash = db.get_user_api(event.sender_id)
+    session = db.get_user_session(event.sender_id)
+    
+    if api_id and api_hash:
+        status = "✅ API credentials set"
+        api_info = f"**API ID:** `{api_id}`\n**API Hash:** `{api_hash[:8]}...{api_hash[-4:]}`"
+    else:
+        status = "❌ No API credentials"
+        api_info = "Use `/setapi` to set your credentials"
+    
+    session_status = "✅ Logged in" if session else "❌ Not logged in"
+    
+    await event.respond(
+        f"🔑 **Your API Status**\n\n"
+        f"**API:** {status}\n"
+        f"{api_info}\n\n"
+        f"**Session:** {session_status}\n\n"
+        f"Use `/clearapi` to remove your credentials"
+    )
+
+
+@bot.on(events.NewMessage(pattern='/clearapi', incoming=True, func=lambda e: e.is_private))
+@register_user  
+async def clearapi_command(event):
+    """Clear user's API credentials and session"""
+    from helpers.session_manager import session_manager
+    
+    # Remove from session manager
+    await session_manager.remove_session(event.sender_id)
+    
+    # Clear from database
+    if db.clear_user_api(event.sender_id):
+        await event.respond(
+            "✅ **API credentials and session cleared!**\n\n"
+            "To use the bot again:\n"
+            "1️⃣ `/setapi <API_ID> <API_HASH>`\n"
+            "2️⃣ `/login <phone_number>`"
+        )
+    else:
+        await event.respond("❌ **Failed to clear credentials.** Please try again.")
+
 @bot.on(events.NewMessage(pattern='/login', incoming=True, func=lambda e: e.is_private))
 @register_user
 async def login_command(event):

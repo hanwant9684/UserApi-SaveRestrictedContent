@@ -26,7 +26,7 @@ class RichAdsManager:
         """Check if RichAds is configured"""
         return bool(self.publisher_id)
     
-    async def fetch_ad(self, language_code: str = "en", telegram_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    async def fetch_ad(self, language_code: str = "en", telegram_id: str = None) -> Optional[List[Dict[str, Any]]]:
         """Fetch ad from RichAds API"""
         if not self.is_enabled():
             return None
@@ -74,8 +74,8 @@ class RichAdsManager:
             LOGGER(__name__).warning(f"RichAds impression error: {str(e)[:100]}")
             return False
     
-    async def send_ad_to_user(self, bot_client, chat_id: int, language_code: str = "en") -> bool:
-        """Fetch and send RichAd to user as photo message using BOT API"""
+    async def send_ad_to_user(self, client, chat_id: int, language_code: str = "en") -> bool:
+        """Fetch and send RichAd to user as photo message"""
         if not self.is_enabled():
             LOGGER(__name__).debug("RichAds not enabled")
             return False
@@ -123,7 +123,7 @@ class RichAdsManager:
             ])
             
             if image_url:
-                await bot_client.send_file(
+                await client.send_file(
                     chat_id,
                     file=image_url,
                     caption=caption,
@@ -132,7 +132,7 @@ class RichAdsManager:
                 )
             else:
                 # Fallback to text message if no image
-                await bot_client.send_message(
+                await client.send_message(
                     chat_id,
                     caption,
                     buttons=buttons.to_telethon(),

@@ -13,10 +13,9 @@ A Telegram bot to save restricted content from channels.
 - Enhanced legal compliance with ad displays.
 
 ## Architecture
-- `main.py`: Entry point for Telethon bot (Direct execution).
+- `main.py`: Entry point for Telethon bot.
 - `ad_manager.py`: Logic for choosing between RichAds and AdsGram.
 - `richads.py`: Handler for RichAds XML API.
 - `adsgram.py`: Handler for AdsGram API.
 - `legal_acceptance.py`: Manages T&C/Privacy Policy acceptance.
 - `database_sqlite.py`: Local persistent storage.
-- `helpers/`: Utility functions for sessions, transfers, and file management.

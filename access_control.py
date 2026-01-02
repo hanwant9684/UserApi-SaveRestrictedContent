@@ -149,7 +149,7 @@ async def check_user_session(user_id: int):
 
 async def get_user_client(user_id: int):
     """
-    Get user's personal client using THEIR API credentials
+    Get user's personal client if they have session
     
     CRITICAL: Uses SessionManager to limit concurrent sessions and prevent memory exhaustion
     On Render/Replit (512MB RAM), limits to 10 concurrent user sessions (~5-10MB each due to StringSession)
@@ -158,7 +158,6 @@ async def get_user_client(user_id: int):
     Returns:
         tuple: (client, error_code) where:
             - (TelegramClient, None) if successful
-            - (None, 'no_api') if user hasn't set up their API credentials yet
             - (None, 'no_session') if user hasn't logged in yet
             - (None, 'slots_full') if all session slots are busy with active downloads
             - (None, 'error') for other errors
@@ -167,18 +166,16 @@ async def get_user_client(user_id: int):
     if not session:
         return (None, 'no_session')
     
-    # Get user's API credentials instead of using bot's API
-    api_credentials = db.get_user_api_credentials(user_id)
-    if not api_credentials:
+    # Check if user has API credentials
+    api_id, api_hash = db.get_user_api(user_id)
+    if not api_id or not api_hash:
         return (None, 'no_api')
-    
-    api_id, api_hash = api_credentials
-    
+
     from helpers.session_manager import session_manager
     import traceback
 
     try:
-        # Use SessionManager to get or create session with USER's API credentials
+        # Use SessionManager to get or create session
         # This prevents memory leaks by limiting concurrent sessions and reusing existing ones
         user_client, error_code = await session_manager.get_or_create_session(
             user_id=user_id,
@@ -250,20 +247,14 @@ def force_subscribe(func):
                 # Get channel entity first
                 chat_entity = await client.get_entity(channel)
                 
-                # Check if user is participant using the correct Telethon method
-                # Telethon's TelegramClient uses get_participants with a filter for single users
-                # or checks permissions directly.
-                from telethon.tl.functions.channels import GetParticipantRequest
-                from telethon.tl.types import ChannelParticipant
-                
-                try:
-                    participant_res = await client(GetParticipantRequest(chat_entity, user_id))
-                    if participant_res and hasattr(participant_res, 'participant'):
-                        # User is a member
-                        return await func(event)
-                except UserNotParticipantError:
-                    # User is not in channel, fall through to show join message
-                    pass
+                # Try to get user as participant - this will raise UserNotParticipantError if not a member
+                participant = await client.get_participant(chat_entity, user_id)
+                if participant:
+                    # User is a member
+                    return await func(event)
+            except UserNotParticipantError:
+                # User is not in channel, fall through to show join message
+                pass
             except Exception as e:
                 # If get_participant fails for other reasons, try alternative method
                 LOGGER(__name__).debug(f"get_participant failed, trying get_permissions: {e}")

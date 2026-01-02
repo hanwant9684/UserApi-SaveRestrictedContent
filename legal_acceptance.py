@@ -123,13 +123,11 @@ async def show_legal_acceptance(event, bot=None):
         LOGGER(__name__).info(f"Shown legal acceptance screen to user {event.sender_id}")
         
         # Show ad below legal acceptance if bot client is provided
-        # Note: New users are neither premium nor admin, so we default to showing ads
         if bot and ad_manager.is_any_enabled():
             try:
                 sender = await event.get_sender()
                 lang_code = getattr(sender, 'lang_code', 'en') or 'en'
-                # Default for new users who haven't accepted terms yet
-                await ad_manager.send_ad_with_fallback(bot, event.sender_id, event.chat_id, lang_code, is_premium=False, is_admin=False)
+                await ad_manager.send_ad_with_fallback(bot, event.sender_id, event.chat_id, lang_code)
             except Exception as ad_error:
                 LOGGER(__name__).warning(f"Failed to send ad after legal acceptance: {ad_error}")
         

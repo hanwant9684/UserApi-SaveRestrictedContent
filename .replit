@@ -1,7 +1,7 @@
-modules = ["web", "python-3.11"]
+modules = ["python-3.11"]
 [nix]
 channel = "stable-25_05"
-packages = ["cargo", "ffmpeg", "libiconv", "libuv", "openssl", "rustc", "unzip"]
+packages = ["cargo", "libiconv", "libuv", "rustc", "unzip"]
 
 [agent]
 expertMode = true
@@ -16,15 +16,19 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Telegram Bot"
+args = "WSGI Server"
 
 [[workflows.workflow]]
-name = "Telegram Bot"
+name = "WSGI Server"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python server_wsgi.py"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
 
 [[ports]]
 localPort = 5000

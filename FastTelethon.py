@@ -113,14 +113,8 @@ class UploadSender:
 
     async def disconnect(self) -> None:
         if self.previous:
-            try:
-                await asyncio.wait_for(self.previous, timeout=5)
-            except:
-                pass
-        try:
-            await asyncio.wait_for(self.sender.disconnect(), timeout=5)
-        except:
-            pass
+            await self.previous
+        return await self.sender.disconnect()
 
 
 class ParallelTransferrer:
@@ -144,26 +138,10 @@ class ParallelTransferrer:
         if not self.senders:
             return
         try:
-            # Add timeout to disconnect to prevent hanging
-            await asyncio.wait_for(
-                asyncio.gather(*[sender.disconnect() for sender in self.senders], return_exceptions=True),
-                timeout=10
-            )
+            await asyncio.gather(*[sender.disconnect() for sender in self.senders], return_exceptions=True)
         except Exception:
             pass
-        
-        # Help garbage collector by breaking circular references
-        for sender in self.senders:
-            try:
-                if hasattr(sender, 'client'): sender.client = None
-                if hasattr(sender, 'sender'): sender.sender = None
-            except:
-                pass
-                
         self.senders = None
-        # Explicitly trigger GC for multi-sender cleanup
-        import gc
-        gc.collect()
 
     @staticmethod
     def _get_connection_count(file_size: int, max_count: int = 8,
@@ -275,17 +253,9 @@ class ParallelTransferrer:
     async def _create_sender(self) -> MTProtoSender:
         dc = await self.client._get_dc(self.dc_id)
         sender = MTProtoSender(self.auth_key, loggers=self.client._log)
-        try:
-            await asyncio.wait_for(
-                sender.connect(self.client._connection(dc.ip_address, dc.port, dc.id,
-                                                         loggers=self.client._log,
-                                                         proxy=self.client._proxy)),
-                timeout=10
-            )
-        except Exception as e:
-            log.error(f"Failed to connect MTProtoSender: {e}")
-            raise
-            
+        await sender.connect(self.client._connection(dc.ip_address, dc.port, dc.id,
+                                                     loggers=self.client._log,
+                                                     proxy=self.client._proxy))
         if not self.auth_key:
             log.debug(f"Exporting auth to DC {self.dc_id}")
             auth = await self.client(ExportAuthorizationRequest(self.dc_id))

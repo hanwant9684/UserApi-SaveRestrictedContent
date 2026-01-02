@@ -19,30 +19,36 @@ from logger import LOGGER
 class PhoneAuthHandler:
     """Handle phone number based authentication for users"""
 
-    def __init__(self, api_id, api_hash):
-        self.api_id = api_id
-        self.api_hash = api_hash
+    def __init__(self):
         self.pending_auth = {}
         self._cleanup_task = None
 
     async def send_otp(self, user_id: int, phone_number: str):
-        """
-        Send OTP to user's phone number
-        Returns: (success: bool, message: str, phone_code_hash: str or None)
-        """
+        """Send OTP using user's personal API credentials"""
+        from database_sqlite import db
+        
+        # Get user's API credentials
+        api_id, api_hash = db.get_user_api(user_id)
+        
+        if not api_id or not api_hash:
+            return False, (
+                "❌ **API credentials not set!**\n\n"
+                "Please set your API credentials first:\n"
+                "`/setapi <API_ID> <API_HASH>`\n\n"
+                "Get them from: https://my.telegram.org"
+            ), None
+
+        client = None
         try:
             # Create Telethon client for authentication
             # Use StringSession with empty string for new session
-            # use_ipv6=False and connection_retries=3 to prevent hangs
-            # Ensure no file is created by passing a StringSession object
             client = TelegramClient(
                 StringSession(),
-                self.api_id,
-                self.api_hash,
+                api_id,
+                api_hash,
                 connection_retries=3,
                 retry_delay=1,
-                timeout=10,
-                base_logger=LOGGER(__name__)
+                timeout=10
             )
 
             await client.connect()
@@ -65,19 +71,21 @@ class PhoneAuthHandler:
         except FloodWaitError as e:
             LOGGER(__name__).error(f"FloodWait error: {e}")
             # Disconnect client to prevent memory leak
-            try:
-                await client.disconnect()
-            except:
-                pass
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except:
+                    pass
             return False, f"❌ **Rate limit exceeded. Please wait {e.seconds} seconds before trying again.**", None
 
         except Exception as e:
             LOGGER(__name__).error(f"Error sending OTP to {phone_number}: {e}")
             # Disconnect client to prevent memory leak on failed login attempts
-            try:
-                await client.disconnect()
-            except:
-                pass
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except:
+                    pass
             return False, f"❌ **Failed to send OTP: {str(e)}**\n\nMake sure the phone number is in international format (e.g., +(91)9012345678 OR +919012345678)", None
 
     async def verify_otp(self, user_id: int, otp_code: str):
@@ -93,20 +101,15 @@ class PhoneAuthHandler:
         phone_number = auth_data['phone_number']
         phone_code_hash = auth_data['phone_code_hash']
 
+        # Strip spaces and any non-digit characters from OTP code
+        # This allows users to enter codes like "1 2 3 4 5" or "12345"
+        cleaned_code = ''.join(filter(str.isdigit, otp_code))
+
         try:
-            # Strip spaces and any non-digit characters from OTP code
-            # This allows users to enter codes like "1 2 3 4 5" or "12345"
-            cleaned_code = ''.join(filter(str.isdigit, otp_code))
-            
             LOGGER(__name__).info(f"Attempting sign_in for user {user_id}")
             
             # Sign in with phone code
-            # Pass BOTH phone_number and phone_code_hash for security verification
-            await client.sign_in(
-                phone=phone_number,
-                code=cleaned_code,
-                phone_code_hash=phone_code_hash
-            )
+            await client.sign_in(phone_number, cleaned_code, phone_code_hash=phone_code_hash)
             
             LOGGER(__name__).info(f"Sign_in successful for user {user_id}, exporting session...")
 
