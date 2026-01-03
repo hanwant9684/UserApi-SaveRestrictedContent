@@ -166,7 +166,11 @@ async def get_user_client(user_id: int):
     if not session:
         return (None, 'no_session')
     
-    from config import PyroConf
+    # Check if user has API credentials
+    api_id, api_hash = db.get_user_api(user_id)
+    if not api_id or not api_hash:
+        return (None, 'no_api')
+
     from helpers.session_manager import session_manager
     import traceback
 
@@ -176,8 +180,8 @@ async def get_user_client(user_id: int):
         user_client, error_code = await session_manager.get_or_create_session(
             user_id=user_id,
             session_string=session,
-            api_id=PyroConf.API_ID,
-            api_hash=PyroConf.API_HASH
+            api_id=api_id,
+            api_hash=api_hash
         )
         
         if user_client:
