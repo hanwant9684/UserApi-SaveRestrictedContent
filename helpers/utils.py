@@ -595,7 +595,7 @@ async def safe_progress_callback(current, total, *args):
             LOGGER(__name__).warning(f"Progress callback error: {e}")
 
 
-async def forward_to_dump_channel(bot, sent_message, user_id, caption=None, source_url=None):
+async def forward_to_dump_channel(bot, sent_message, user_id, caption=None, source_url=None, user_client=None):
     """
     Send media to dump channel for monitoring (if configured).
     Uses the media from sent_message (no re-upload) with custom caption showing user ID.
@@ -606,6 +606,7 @@ async def forward_to_dump_channel(bot, sent_message, user_id, caption=None, sour
         user_id: User ID who downloaded this
         caption: Original caption (optional, added below user ID)
         source_url: Original download URL (optional, shows where user downloaded from)
+        user_client: The user's personal client (optional)
     """
     from config import PyroConf
     
@@ -635,9 +636,11 @@ async def forward_to_dump_channel(bot, sent_message, user_id, caption=None, sour
             LOGGER(__name__).warning("No media found in sent_message to forward")
             return
 
-        # Send media using the media from sent_message (no re-upload!)
-        # Telethon reuses the file reference, so this is RAM-efficient
-        await bot.send_file(
+        # Use the user_client (user's personal account) if provided, otherwise fallback to bot.
+        # This bypasses the 'Media is invalid for bot' error because the user account
+        # has already 'seen' and uploaded the media successfully.
+        client_to_use = user_client if user_client else bot
+        await client_to_use.send_file(
             channel_id,
             media,
             caption=custom_caption
@@ -711,8 +714,8 @@ async def send_media(
         
         # Forward to dump channel if configured (RAM-efficient, no re-upload)
         if user_id and sent_message:
-            # Use bot client to forward to dump channel (user client may not have access to dump channel)
-            await forward_to_dump_channel(bot, sent_message, user_id, caption, source_url)
+            # Pass user_client to forward to dump channel to bypass bot restrictions
+            await forward_to_dump_channel(bot, sent_message, user_id, caption, source_url, user_client=upload_client)
         
         memory_monitor.log_memory_snapshot("Upload Complete", f"User {user_id or 'unknown'}: {os.path.basename(media_path)} (photo)", silent=True)
         return True
@@ -781,7 +784,7 @@ async def send_media(
         
         # Forward to dump channel if upload was successful (RAM-efficient, no re-upload)
         if user_id and sent_message:
-            await forward_to_dump_channel(bot, sent_message, user_id, caption, source_url)
+            await forward_to_dump_channel(bot, sent_message, user_id, caption, source_url, user_client=upload_client)
         
         memory_monitor.log_memory_snapshot("Upload Complete", f"User {user_id or 'unknown'}: {os.path.basename(media_path)} (video)", silent=True)
         return True
@@ -828,10 +831,9 @@ async def send_media(
                 force_document=False
             )
         
-        # Forward to dump channel if configured (RAM-efficient, no re-upload)
+        # Forward to dump channel if upload was successful (RAM-efficient, no re-upload)
         if user_id and sent_message:
-            # Use bot client to forward to dump channel (user client may not have access to dump channel)
-            await forward_to_dump_channel(bot, sent_message, user_id, caption, source_url)
+            await forward_to_dump_channel(bot, sent_message, user_id, caption, source_url, user_client=upload_client)
         
         memory_monitor.log_memory_snapshot("Upload Complete", f"User {user_id or 'unknown'}: {os.path.basename(media_path)} (audio)", silent=True)
         return True
@@ -864,10 +866,9 @@ async def send_media(
                 force_document=True
             )
         
-        # Forward to dump channel if configured (RAM-efficient, no re-upload)
+        # Forward to dump channel if upload was successful (RAM-efficient, no re-upload)
         if user_id and sent_message:
-            # Use bot client to forward to dump channel (user client may not have access to dump channel)
-            await forward_to_dump_channel(bot, sent_message, user_id, caption, source_url)
+            await forward_to_dump_channel(bot, sent_message, user_id, caption, source_url, user_client=upload_client)
         
         memory_monitor.log_memory_snapshot("Upload Complete", f"User {user_id or 'unknown'}: {os.path.basename(media_path)} (document)", silent=True)
         return True
