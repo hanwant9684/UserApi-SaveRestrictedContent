@@ -145,11 +145,24 @@ class ParallelTransferrer:
     async def _cleanup(self) -> None:
         if not self.senders:
             return
+        
+        senders_to_disconnect = self.senders
+        self.senders = None  # Clear immediately to prevent double-cleanup
+        
         try:
-            await asyncio.gather(*[sender.disconnect() for sender in self.senders], return_exceptions=True)
-        except Exception:
-            pass
-        self.senders = None
+            # Disconnect all MTProtoSenders in parallel
+            await asyncio.gather(
+                *[sender.disconnect() for sender in senders_to_disconnect], 
+                return_exceptions=True
+            )
+        except Exception as e:
+            log.debug(f"Error during parallel transfer cleanup: {e}")
+        finally:
+            # Ensure each sender's previous tasks are cancelled if any
+            for sender in senders_to_disconnect:
+                if isinstance(sender, UploadSender) and sender.previous:
+                    if not sender.previous.done():
+                        sender.previous.cancel()
 
     @staticmethod
     def _get_connection_count(file_size: int, max_count: int = 8,
