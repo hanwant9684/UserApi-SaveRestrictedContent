@@ -10,10 +10,10 @@ class AdManager:
     Manages ad display logic.
     """
     
-    async def send_ad_with_fallback(self, bot, user_id: int, chat_id: int, language_code: str = "en", is_premium: bool = False, is_admin: bool = False) -> bool:
+    async def send_ad_with_fallback(self, bot, user_id: int, chat_id: int, language_code: str = "en", is_premium: bool = False, is_admin: bool = False, force: bool = False) -> bool:
         """
         Try to send an ad using RichAds.
-        Skips ads for premium and admin users.
+        Skips ads for premium and admin users unless force=True.
         
         Args:
             bot: Telegram bot client
@@ -22,12 +22,13 @@ class AdManager:
             language_code: Language code for the ad
             is_premium: Whether user is premium
             is_admin: Whether user is admin
+            force: Whether to force show ad even for premium/admin (start/link)
         
         Returns:
             True if ad was sent, False otherwise
         """
-        # Skip ads for premium and admin users
-        if is_premium or is_admin:
+        # Skip ads for premium and admin users unless forced
+        if (is_premium or is_admin) and not force:
             LOGGER(__name__).debug(f"Skipped ads for user {user_id} (premium: {is_premium}, admin: {is_admin})")
             return False
         

@@ -27,3 +27,10 @@ Telethon
 uvloop
 waitress
 psutil
+aiohttp
+cryptg
+orjson
+psutil
+Telethon
+uvloop
+waitress

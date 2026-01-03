@@ -219,6 +219,17 @@ async def start(event):
             LOGGER(__name__).warning(f"❌ AUTO-VERIFICATION FAILED | User: {event.sender_id} ({username}) | Reason: {msg}")
         return
     
+    # Determine user info for ad management
+    sender = await event.get_sender()
+    lang_code = getattr(sender, 'lang_code', 'en') or 'en'
+    user_type = db.get_user_type(event.sender_id)
+    is_premium = user_type == 'paid'
+    is_admin = db.is_admin(event.sender_id)
+
+    # Show ad for all users (New or Existing) on /start
+    # ad_manager.send_ad_with_fallback now handles "forced" logic
+    await ad_manager.send_ad_with_fallback(bot, event.sender_id, event.chat_id, lang_code, is_premium=is_premium, is_admin=is_admin, force=True)
+
     welcome_text = (
         "🎉 **Welcome to Save Restricted Content Bot!**\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -257,15 +268,6 @@ async def start(event):
     welcome_text += f"\n\n💡 **Created by:** {get_creator_username()}"
     
     await send_video_message(event, 41, welcome_text, markup, "start command")
-    
-    # Show ad after welcome message (RichAds first, fallback logic in ad_manager)
-    sender = await event.get_sender()
-    lang_code = getattr(sender, 'lang_code', 'en') or 'en'
-    user_type = db.get_user_type(event.sender_id)
-    is_premium = user_type == 'paid'
-    is_admin = db.is_admin(event.sender_id)
-    
-    await ad_manager.send_ad_with_fallback(bot, event.sender_id, event.chat_id, lang_code, is_premium=is_premium, is_admin=is_admin)
 
 @bot.on(events.NewMessage(pattern='/help', incoming=True, func=lambda e: e.is_private))
 @register_user
@@ -361,6 +363,18 @@ async def handle_download(bot_client, event, post_url: str, user_client=None, in
     IMPORTANT: user_client is managed by SessionManager - DO NOT call .stop() on it!
     The SessionManager will automatically reuse and cleanup sessions to prevent memory leaks.
     """
+    # Resolve URL and show ad first
+    LOGGER(__name__).info(f"📥 LINK RECEIVED | User: {event.sender_id} | Link: {post_url}")
+    
+    # Show ad immediately when user gives link
+    sender = await event.get_sender()
+    lang_code = getattr(sender, 'lang_code', 'en') or 'en'
+    user_type = db.get_user_type(event.sender_id)
+    is_premium = user_type == 'paid'
+    is_admin = db.is_admin(event.sender_id)
+    
+    await ad_manager.send_ad_with_fallback(bot_client, event.sender_id, event.chat_id, lang_code, is_premium=is_premium, is_admin=is_admin, force=True)
+
     # Cut off URL at '?' if present
     if "?" in post_url:
         post_url = post_url.split("?", 1)[0]
