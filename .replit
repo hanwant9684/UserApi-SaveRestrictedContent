@@ -1,10 +1,10 @@
-modules = ["python-3.12", "web"]
-[nix]
-channel = "stable-25_05"
-packages = ["cargo", "ffmpeg", "libiconv", "libuv", "openssl", "rustc", "unzip"]
-
+modules = ["web", "python-3.11"]
 [agent]
 expertMode = true
+
+[nix]
+channel = "stable-25_05"
+packages = ["cargo", "ffmpeg", "freetype", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libuv", "libwebp", "libxcrypt", "openjpeg", "openssl", "rustc", "tcl", "tk", "unzip", "zlib"]
 
 [workflows]
 runButton = "Project"
@@ -16,20 +16,23 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "WSGI Server"
+args = "telegram-bot"
 
 [[workflows.workflow]]
-name = "WSGI Server"
+name = "telegram-bot"
 author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python server_wsgi.py"
-waitForPort = 5000
-
-[workflows.workflow.metadata]
-outputType = "webview"
+args = "python main.py"
 
 [[ports]]
 localPort = 5000
-externalPort = 80
+externalPort = 5000
+
+[deployment]
+deploymentTarget = "vm"
+run = ["python", "server_wsgi.py"]
