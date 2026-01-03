@@ -35,7 +35,7 @@ class PhoneAuthHandler:
                 "❌ **API credentials not set!**\n\n"
                 "Please set your API credentials first:\n"
                 "`/setapi <API_ID> <API_HASH>`\n\n"
-                "Get them from: https://my.telegram.org"
+                "Get them from: @Api_id_api_hash_wolfy004_bot"
             ), None
 
         client = None

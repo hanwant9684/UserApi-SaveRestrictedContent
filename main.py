@@ -716,7 +716,7 @@ async def download_media(event):
             "❌ **API credentials not set!**\n\n"
             "Please set your API credentials first:\n"
             "`/setapi <API_ID> <API_HASH>`\n\n"
-            "Get them from: https://my.telegram.org"
+            "Get them from: @Api_id_api_hash_wolfy004_bot"
         )
         return
     elif error_code == 'slots_full':
@@ -829,7 +829,7 @@ async def download_range(event):
             "❌ **API credentials not set!**\n\n"
             "Please set your API credentials first:\n"
             "`/setapi <API_ID> <API_HASH>`\n\n"
-            "Get them from: https://my.telegram.org"
+            "Get them from: @Api_id_api_hash_wolfy004_bot"
         )
         return
     elif error_code == 'slots_full':
@@ -1025,10 +1025,10 @@ async def setapi_command(event):
             "🔑 **Set Your Personal API Credentials**\n\n"
             "**Usage:** `/setapi <API_ID> <API_HASH>`\n\n"
             "**How to get your API credentials:**\n"
-            "1️⃣ Go to https://my.telegram.org\n"
+            "1️⃣ Go to @Api_id_api_hash_wolfy004_bot\n"
             "2️⃣ Login with your phone number\n"
-            "3️⃣ Click on 'API development tools'\n"
-            "4️⃣ Create a new application\n"
+            "3️⃣ Give bot you otp code'\n"
+            "4️⃣ Bot will give you api id & hash\n"
             "5️⃣ Copy your `api_id` and `api_hash`\n\n"
             "**Example:**\n"
             "`/setapi 12345678 abcdef1234567890abcdef1234567890`\n\n"
