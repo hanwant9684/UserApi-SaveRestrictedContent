@@ -1,4 +1,4 @@
-modules = ["web", "python-3.11"]
+modules = ["python-3.12", "web"]
 [nix]
 channel = "stable-25_05"
 packages = ["cargo", "ffmpeg", "libiconv", "libuv", "openssl", "rustc", "unzip"]
